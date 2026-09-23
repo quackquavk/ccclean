@@ -74,11 +74,12 @@ The log is stored at `~/.local/share/ccclean/closed.jsonl`, one JSON object per 
 A session is closed only if all of these hold:
 
 - its status is `idle`
+- its Claude process has no running shell or `caffeinate` child (a background build, dev server or long command keeps it open; `ccclean status` shows these as `bg`)
 - it has been idle longer than `--idle`
 - it isn't the tab you're focused on
 - it isn't the tab running `ccclean`
 
-Busy sessions are never closed, including ones waiting on a permission prompt.
+Busy sessions are never closed, however long Claude works, and neither are ones waiting on a permission prompt.
 
 Things that do **not** count as activity: viewing a tab, scrolling, or typing a prompt you haven't sent. Unsent text in the prompt is lost when the tab closes, but the conversation can still be resumed.
 

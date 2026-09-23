@@ -20,6 +20,7 @@ struct Session {
     last_active: u64, // epoch secs
     tty: String,
     surface: Option<Surface>,
+    working: bool, // has a running shell/caffeinate child
 }
 
 #[derive(Clone)]
@@ -64,7 +65,8 @@ USAGE:
   ccclean uninstall                   close the watcher workspace
 
 Durations: 90s, 30m, 2h, 1d. Only sessions whose status is 'idle' are closed;
-busy ones and the surface you're currently focused on are never touched.
+busy ones, ones still running a background command (STATUS 'bg'), and the
+surface you're currently focused on are never touched.
 Log: {}",
         log_path().display()
     );
@@ -194,18 +196,33 @@ fn surfaces_by_tty() -> Result<HashMap<String, Surface>, String> {
     Ok(map)
 }
 
-/// pid -> tty for every process that has one
-fn ttys_by_pid() -> HashMap<i32, String> {
-    let out = Command::new("ps").args(["-axo", "pid=,tty="]).output().unwrap_or_else(|e| die(&e.to_string()));
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(|l| {
-            let mut it = l.split_whitespace();
-            let pid = it.next()?.parse().ok()?;
-            let tty = it.next()?;
-            (tty != "??").then(|| (pid, tty.to_string()))
-        })
-        .collect()
+/// Child processes that mean a session is still doing work even if its status
+/// says idle: shells running (background) commands, and `caffeinate`, which
+/// Claude Code holds while working. MCP servers (node, uv, python…) don't count.
+const WORK_CHILDREN: &[&str] = &["zsh", "bash", "sh", "fish", "dash", "caffeinate"];
+
+struct Procs {
+    tty: HashMap<i32, String>,       // pid -> tty, for processes attached to one
+    working: std::collections::HashSet<i32>, // pids with a WORK_CHILDREN child
+}
+
+fn procs() -> Procs {
+    let out = Command::new("ps").args(["-axo", "pid=,ppid=,tty=,comm="]).output().unwrap_or_else(|e| die(&e.to_string()));
+    let mut p = Procs { tty: HashMap::new(), working: Default::default() };
+    for l in String::from_utf8_lossy(&out.stdout).lines() {
+        let mut it = l.split_whitespace();
+        let (Some(pid), Some(ppid), Some(tty)) = (it.next(), it.next(), it.next()) else { continue };
+        let (Ok(pid), Ok(ppid)) = (pid.parse::<i32>(), ppid.parse::<i32>()) else { continue };
+        let comm = it.collect::<Vec<_>>().join(" ");
+        let base = comm.rsplit('/').next().unwrap_or(&comm).trim_start_matches('-');
+        if WORK_CHILDREN.contains(&base) {
+            p.working.insert(ppid);
+        }
+        if tty != "??" {
+            p.tty.insert(pid, tty.to_string());
+        }
+    }
+    p
 }
 
 fn transcript(cwd: &str, session_id: &str) -> PathBuf {
@@ -214,7 +231,8 @@ fn transcript(cwd: &str, session_id: &str) -> PathBuf {
 }
 
 fn sessions() -> Result<Vec<Session>, String> {
-    let ttys = ttys_by_pid();
+    let procs = procs();
+    let ttys = &procs.tty;
     let surfaces = surfaces_by_tty()?;
     let dir = home().join(".claude/sessions");
     let mut out = Vec::new();
@@ -238,6 +256,7 @@ fn sessions() -> Result<Vec<Session>, String> {
             name: v["name"].as_str().unwrap_or_default().into(),
             status: v["status"].as_str().unwrap_or("?").into(),
             surface: surfaces.get(tty).cloned(),
+            working: procs.working.contains(&pid),
             tty: tty.clone(),
             session_id,
             cwd,
@@ -274,7 +293,7 @@ fn status() {
             Some(sf) => (sf.surface_ref.clone(), clip(&sf.title, 34)),
             None => (s.tty.clone(), "(not in cmux)".into()),
         };
-        println!("{:<8} {:<6} {:<14} {:<34} {}", ago(t.saturating_sub(s.last_active)), s.status, loc, title, tilde(&s.cwd));
+        println!("{:<8} {:<6} {:<14} {:<34} {}", ago(t.saturating_sub(s.last_active)), if s.working && s.status == "idle" { "bg" } else { &s.status }, loc, title, tilde(&s.cwd));
     }
 }
 
@@ -317,7 +336,7 @@ fn sweep_once(idle: u64, dry: bool) -> Result<usize, String> {
             continue; // never fall back to cmux's "current" surface
         }
         let idle_for = t.saturating_sub(s.last_active);
-        if s.status != "idle" || idle_for < idle || sf.active || me.as_deref() == Some(s.tty.as_str()) {
+        if s.status != "idle" || s.working || idle_for < idle || sf.active || me.as_deref() == Some(s.tty.as_str()) {
             continue;
         }
         let resume = format!("cd {} && claude --resume {}", shell_quote(&s.cwd), s.session_id);
