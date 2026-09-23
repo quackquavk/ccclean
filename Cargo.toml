@@ -1,0 +1,26 @@
+[package]
+name = "ccclean"
+version = "0.1.0"
+edition = "2024"
+description = "Close idle Claude Code sessions in cmux and keep a log of what was closed so you can resume later"
+license = "MIT"
+repository = "https://github.com/quackquavk/ccclean"
+homepage = "https://github.com/quackquavk/ccclean"
+readme = "README.md"
+keywords = ["claude", "claude-code", "cmux", "terminal", "cli"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+libc = "0.2.189"
+serde_json = "1.0.151"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
