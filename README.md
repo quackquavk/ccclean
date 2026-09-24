@@ -68,7 +68,7 @@ The log is stored at `~/.local/share/ccclean/closed.jsonl`, one JSON object per 
 ## How inactivity is measured
 
 1. Each running Claude Code process writes `~/.claude/sessions/<pid>.json` with its working directory, session ID, status (`busy` / `idle`) and when that status last changed.
-2. Idle time counts from the later of two timestamps: that status change, and the last write to the session's transcript (`~/.claude/projects/<dir>/<session>.jsonl`). Sending a message resets it.
+2. Idle time counts from the later of two timestamps: that status change, and the timestamp of the last user or assistant message in the session's transcript (`~/.claude/projects/<dir>/<session>.jsonl`). The file's modification time isn't used, because Claude Code keeps appending bookkeeping lines to idle transcripts. Sending a message resets it.
 3. Each Claude process is matched to its cmux tab by tty, using `cmux --json tree`.
 
 A session is closed only if all of these hold:

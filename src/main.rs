@@ -113,8 +113,43 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
 }
 
-fn mtime(p: &Path) -> Option<u64> {
-    fs::metadata(p).ok()?.modified().ok()?.duration_since(UNIX_EPOCH).ok().map(|d| d.as_secs())
+/// Timestamp of the last real message (`user` or `assistant` entry) in a transcript.
+/// File mtime is useless here: idle sessions keep appending untimestamped
+/// bookkeeping lines (cost-state, last-prompt, file-history-snapshot).
+fn last_message_at(p: &Path) -> Option<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+    const TAIL: u64 = 1 << 20;
+    let mut f = fs::File::open(p).ok()?;
+    let len = f.metadata().ok()?.len();
+    let start = len.saturating_sub(TAIL);
+    f.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    let mut lines = text.lines();
+    if start > 0 {
+        lines.next(); // partial line
+    }
+    lines.rev().find_map(|l| {
+        let v: Value = serde_json::from_str(l).ok()?;
+        matches!(v["type"].as_str(), Some("user" | "assistant")).then_some(())?;
+        parse_iso(v["timestamp"].as_str()?)
+    })
+}
+
+/// "2026-09-22T03:59:34.959Z" -> epoch seconds (UTC only, which is what Claude writes).
+fn parse_iso(s: &str) -> Option<u64> {
+    let n = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
+    let (y, m, d) = (n(0..4)?, n(5..7)?, n(8..10)?);
+    let (hh, mm, ss) = (n(11..13)?, n(14..16)?, n(17..19)?);
+    // days from civil (Howard Hinnant)
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    u64::try_from(days * 86400 + hh * 3600 + mm * 60 + ss).ok()
 }
 
 fn ago(secs: u64) -> String {
@@ -250,7 +285,7 @@ fn sessions() -> Result<Vec<Session>, String> {
         let session_id = v["sessionId"].as_str().unwrap_or_default().to_string();
         let cwd = v["cwd"].as_str().unwrap_or_default().to_string();
         let status_at = v["statusUpdatedAt"].as_u64().or(v["updatedAt"].as_u64()).unwrap_or(0) / 1000;
-        let last_active = status_at.max(mtime(&transcript(&cwd, &session_id)).unwrap_or(0));
+        let last_active = status_at.max(last_message_at(&transcript(&cwd, &session_id)).unwrap_or(0));
         out.push(Session {
             pid,
             name: v["name"].as_str().unwrap_or_default().into(),
