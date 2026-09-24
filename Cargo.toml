@@ -2,12 +2,12 @@
 name = "ccclean"
 version = "0.1.0"
 edition = "2024"
-description = "Close idle Claude Code sessions in cmux and keep a log of what was closed so you can resume later"
+description = "Auto-close idle Claude Code sessions in the cmux terminal and log them so you can resume later"
 license = "MIT"
 repository = "https://github.com/quackquavk/ccclean"
 homepage = "https://github.com/quackquavk/ccclean"
 readme = "README.md"
-keywords = ["claude", "claude-code", "cmux", "terminal", "cli"]
+keywords = ["claude-code", "cmux", "idle", "session-manager", "ai-agents"]
 categories = ["command-line-utilities"]
 
 [dependencies]
