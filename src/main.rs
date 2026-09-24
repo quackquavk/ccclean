@@ -31,6 +31,7 @@ struct Surface {
     workspace_title: String,
     title: String,
     active: bool,
+    only_in_workspace: bool, // cmux refuses to close a workspace's last surface
 }
 
 fn main() {
@@ -209,6 +210,7 @@ fn surfaces_by_tty() -> Result<HashMap<String, Surface>, String> {
     let arr = |v: &Value, k: &str| v[k].as_array().cloned().unwrap_or_default();
     for win in arr(&v, "windows") {
         for ws in arr(&win, "workspaces") {
+            let surface_count: usize = arr(&ws, "panes").iter().map(|p| arr(p, "surfaces").len()).sum();
             for pane in arr(&ws, "panes") {
                 for s in arr(&pane, "surfaces") {
                     let Some(tty) = s["tty"].as_str() else { continue };
@@ -222,6 +224,7 @@ fn surfaces_by_tty() -> Result<HashMap<String, Surface>, String> {
                             title: s["title"].as_str().unwrap_or_default().into(),
                             active: s["active"].as_bool().unwrap_or(false)
                                 && ws["active"].as_bool().unwrap_or(false),
+                            only_in_workspace: surface_count == 1,
                         },
                     );
                 }
@@ -379,7 +382,11 @@ fn sweep_once(idle: u64, dry: bool) -> Result<usize, String> {
             println!("would close {} [{}] idle {} — {} — {}", sf.surface_ref, sf.workspace_title, ago(idle_for), sf.title, tilde(&s.cwd));
             continue;
         }
-        let res = cmux(&["close-surface", "--surface", &sf.surface_id, "--workspace", &sf.workspace_id]);
+        let res = if sf.only_in_workspace {
+            cmux(&["close-workspace", "--workspace", &sf.workspace_id])
+        } else {
+            cmux(&["close-surface", "--surface", &sf.surface_id, "--workspace", &sf.workspace_id])
+        };
         if let Err(e) = res {
             eprintln!("ccclean: failed to close {}: {e}", sf.surface_ref);
             continue;
