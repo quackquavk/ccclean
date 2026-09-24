@@ -79,6 +79,8 @@ A session is closed only if all of these hold:
 - it isn't the tab you're focused on
 - it isn't the tab running `ccclean`
 
+"Closing" means closing the tab. If the session is the only tab in its workspace, only the Claude process is stopped (SIGHUP, then SIGKILL after 5s); the tab and workspace stay open at a shell prompt, since cmux won't close a workspace's last tab and closing the workspace would be too much.
+
 Busy sessions are never closed, however long Claude works, and neither are ones waiting on a permission prompt.
 
 Things that do **not** count as activity: viewing a tab, scrolling, or typing a prompt you haven't sent. Unsent text in the prompt is lost when the tab closes, but the conversation can still be resumed.

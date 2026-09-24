@@ -382,17 +382,18 @@ fn sweep_once(idle: u64, dry: bool) -> Result<usize, String> {
             println!("would close {} [{}] idle {} — {} — {}", sf.surface_ref, sf.workspace_title, ago(idle_for), sf.title, tilde(&s.cwd));
             continue;
         }
-        let res = if sf.only_in_workspace {
-            cmux(&["close-workspace", "--workspace", &sf.workspace_id])
-        } else {
-            cmux(&["close-surface", "--surface", &sf.surface_id, "--workspace", &sf.workspace_id])
-        };
-        if let Err(e) = res {
-            eprintln!("ccclean: failed to close {}: {e}", sf.surface_ref);
+        // cmux won't close a workspace's last surface, and we don't want to close
+        // the workspace either: just stop claude and leave the tab at a shell prompt.
+        if !sf.only_in_workspace {
+            if let Err(e) = cmux(&["close-surface", "--surface", &sf.surface_id, "--workspace", &sf.workspace_id]) {
+                eprintln!("ccclean: failed to close {}: {e}", sf.surface_ref);
+                continue;
+            }
+        }
+        if !stop(s.pid) {
+            eprintln!("ccclean: claude (pid {}) in {} did not exit", s.pid, sf.surface_ref);
             continue;
         }
-        // make sure claude itself is gone even if the surface close didn't HUP it
-        unsafe { libc::kill(s.pid, libc::SIGTERM) };
         let rec = json!({
             "closed_at": t,
             "title": sf.title,
@@ -404,10 +405,30 @@ fn sweep_once(idle: u64, dry: bool) -> Result<usize, String> {
             "resume": resume,
         });
         append_log(&rec);
-        println!("closed {} idle {} — {} — {}", sf.surface_ref, ago(idle_for), sf.title, tilde(&s.cwd));
+        let verb = if sf.only_in_workspace { "stopped claude in" } else { "closed" };
+        println!("{verb} {} idle {} — {} — {}", sf.surface_ref, ago(idle_for), sf.title, tilde(&s.cwd));
         closed += 1;
     }
     Ok(closed)
+}
+
+/// SIGHUP (what a closing terminal sends), then SIGKILL after 5s. True once gone.
+fn stop(pid: i32) -> bool {
+    let alive = || unsafe { libc::kill(pid, 0) == 0 };
+    if !alive() {
+        return true;
+    }
+    unsafe { libc::kill(pid, libc::SIGHUP) };
+    for i in 0..60 {
+        if !alive() {
+            return true;
+        }
+        if i == 50 {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    !alive()
 }
 
 fn shell_quote(s: &str) -> String {
